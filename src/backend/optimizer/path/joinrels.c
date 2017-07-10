@@ -9,7 +9,7 @@
  *
  *
  * IDENTIFICATION
- *	  $PostgreSQL: pgsql/src/backend/optimizer/path/joinrels.c,v 1.93 2008/08/14 18:47:59 tgl Exp $
+ *	  $PostgreSQL: pgsql/src/backend/optimizer/path/joinrels.c,v 1.95 2008/11/22 22:47:06 tgl Exp $
  *
  *-------------------------------------------------------------------------
  */
@@ -431,6 +431,27 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			match_sjinfo = sjinfo;
 			reversed = true;
 		}
+		else if (sjinfo->jointype == JOIN_SEMI &&
+				 bms_equal(sjinfo->syn_righthand, rel2->relids))
+		{
+			/*
+			 * For a semijoin, we can join the RHS to anything else by
+			 * unique-ifying the RHS.
+			 */
+			if (match_sjinfo)
+				return false;	/* invalid join path */
+			match_sjinfo = sjinfo;
+			reversed = false;
+		}
+		else if (sjinfo->jointype == JOIN_SEMI &&
+				 bms_equal(sjinfo->syn_righthand, rel1->relids))
+		{
+			/* Reversed semijoin case */
+			if (match_sjinfo)
+				return false;	/* invalid join path */
+			match_sjinfo = sjinfo;
+			reversed = true;
+		}
 		else
 		{
 			/*----------
@@ -456,13 +477,23 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			 * We assume that make_outerjoininfo() set things up correctly
 			 * so that we'll only match to some SJ if the join is valid.
 			 * Set flag here to check at bottom of loop.
+			 *
+			 * For a semijoin, assume it's okay if either side fully contains
+			 * the RHS (per the unique-ification case above).
 			 *----------
 			 */
-			if (bms_overlap(rel1->relids, sjinfo->min_righthand) &&
+			if (sjinfo->jointype != JOIN_SEMI &&
+				bms_overlap(rel1->relids, sjinfo->min_righthand) &&
 				bms_overlap(rel2->relids, sjinfo->min_righthand))
 			{
 				/* seems OK */
 				Assert(!bms_overlap(joinrelids, sjinfo->min_lefthand));
+			}
+			else if (sjinfo->jointype == JOIN_SEMI &&
+					 (bms_is_subset(sjinfo->syn_righthand, rel1->relids) ||
+					  bms_is_subset(sjinfo->syn_righthand, rel2->relids)))
+			{
+				/* seems OK */
 			}
 			else
 				is_valid_inner = false;
